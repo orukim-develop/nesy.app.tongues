@@ -303,8 +303,26 @@ visualization:
     properties:
       view:
         type: string
-        description: "overview / by_tag / timeline / defended"
+        description: "overview / by_tag / timeline / defended / study"
       target_language:
         type: string
       tag:
         type: string
+      # --- study(공부) 모드 전용 상태 ---
+      # 시각화는 tool 호출 불가 — 버튼 클릭 시 widget-state-change 로 다음 상태를 보내면
+      # 다음 렌더에서 board.ts 가 직접 카드 풀을 읽고 채점/순회한다.
+      filter_mode:
+        type: string
+        description: "study 모드 필터: quota(SRS 만기) / tag(태그별) / all(전체)"
+      card_id:
+        type: string
+        description: "study 모드에서 현재 보여줄 카드 ID. 없으면 큐의 첫 카드."
+      flipped:
+        type: boolean
+        description: "study 모드: 카드 뒷면 노출 여부."
+      grade_card_id:
+        type: string
+        description: "이번 렌더에서 채점할 카드 ID. 적용 후 큐의 다음 카드로 넘어감."
+      grade_correct:
+        type: boolean
+        description: "채점 결과 (true=알았음, false=모르겠음). grade_card_id 와 함께."
