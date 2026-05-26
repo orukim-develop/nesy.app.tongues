@@ -1,0 +1,312 @@
+tools:
+  - name: onboard
+    description: |
+      사용자가 처음으로 이 마도서를 쓸 때 학습 프로파일을 저장한다.
+      "방언이 터지는 마법 처음 쓸게", "온보딩", "프로파일 만들어줘", "내 목표 설정",
+      또는 사용자가 학습 목적을 자연어로 설명하면 호출한다.
+
+      호출 AI(너)의 역할: 사용자에게 다음 5~7가지를 자연어 대화로 물어본 뒤 결과를 정리해서 이 tool에 넘긴다.
+        1. 학습 목표 한 줄 (예: "한국 법무법인에서 미국 클라이언트 상대하는 비즈니스 영어")
+        2. target_language (영어/일본어/중국어/기타 — 메이플 욕설어 같은 sociolect도 가능)
+        3. 사용자의 native_language (한국어 기본)
+        4. 현재 수준 (초/중/상 — 자가진단)
+        5. 사용 맥락 (이메일/계약서/대화/게임 등 자주 쓰는 장면)
+        6. 톤·레지스터 선호 (formal / casual / 둘 다)
+        7. 약점 인식 (사용자가 "내가 자주 실수하는 거"라고 말한 것)
+
+      입력은 이미 인터뷰가 끝난 뒤 정리된 결과여야 한다. 인터뷰 전이면 먼저 사용자와 대화한다.
+
+      반환: 저장된 프로파일과 다음 단계 안내.
+    inputSchema:
+      type: object
+      required: [goal, target_language, native_language]
+      properties:
+        goal:
+          type: string
+          description: 학습 목표 한 줄 요약
+        target_language:
+          type: string
+          description: 학습 대상 언어. ISO 코드 또는 자연어 라벨 (en, ja, zh, "메이플 욕설어" 등)
+        native_language:
+          type: string
+          description: 사용자 모국어 (기본 ko)
+        level:
+          type: string
+          description: "초/중/상 또는 beginner/intermediate/advanced"
+        contexts:
+          type: array
+          description: 사용 맥락 키워드 배열 (예 ["email", "contract", "chat"])
+        tone_preference:
+          type: string
+          description: formal / casual / both
+        known_weaknesses:
+          type: string
+          description: 사용자가 인식한 자기 약점 (자유 텍스트)
+
+  - name: check_text
+    description: |
+      사용자가 작성한 외국어 텍스트를 첨삭하는 도구.
+      Grammarly 같은 도구를 대체하는 다국어 첨삭/교정 엔진.
+
+      트리거 phrase: "이거 첨삭해줘", "이 문장 자연스러워?", "어색한 부분 잡아줘", "이메일 좀 봐줘",
+      "이거 일본어로 맞나?", "더 formal하게", "이거 grammarly 돌려줘 같은 거",
+      또는 사용자가 외국어 문장을 던지며 검토를 요청할 때 항상 호출.
+
+      ⚠️ 중요: 호출 AI(너)가 직접 텍스트를 분석해서 errors 배열을 채워서 넣는다.
+      이 tool은 분석 엔진이 아니라 "분석 결과를 사용자 카드 풀과 매칭하고 응답을 구조화해서 돌려주는" 역할을 한다.
+      네가 해야 할 분석:
+        - grammar 오류 (문법 규칙 위반)
+        - awkward 표현 (의미는 통하지만 부자연스러움)
+        - upgrade 제안 (더 격상된/적절한 표현)
+      각 항목에 original / corrected / category / rule_or_reason 을 채워서 넘긴다.
+      카테고리는 grammar/awkward/upgrade 외에도 학습 도메인에 맞는 동적 카테고리(예: "honorific", "register") 가능.
+
+      반환: errors 각각에 기존 카드 풀과 매칭된 중복 정보 포함. 사용자에게 인정/변명 옵션 제시.
+
+      응답 언어 규칙: 사용자가 학습 중인 target_language로 응답하는 것이 기본.
+      단 사용자가 native_language로 설명을 요청하면 그 언어로.
+    inputSchema:
+      type: object
+      required: [original_text, errors]
+      properties:
+        original_text:
+          type: string
+          description: 사용자가 쓴 원문
+        target_language:
+          type: string
+          description: 이 텍스트의 언어 (en, ja 등). 미지정 시 사용자 프로파일 기본값
+        mode:
+          type: string
+          description: "email / contract / chat / casual / 기타 — 사용자 맥락"
+        errors:
+          type: array
+          description: |
+            호출 AI가 직접 분석한 항목들. 각 항목은:
+            { "original": str, "corrected": str, "category": str, "rule_or_reason": str, "severity": "high"|"medium"|"low" }
+        polished_version:
+          type: string
+          description: 전체 첨삭 후 완성본
+
+  - name: save_correction
+    description: |
+      check_text 결과 중 사용자가 인정한 첨삭 항목을 카드로 적재한다.
+      "이거 인정", "맞네 저장해줘", "전부 인정", "오답노트에 추가" 등에 호출.
+
+      자동으로 카드 타입 결정:
+        - 단일 단어/숙어 → vocab
+        - 문법 규칙 위반 → grammar
+        - 문장/관용구 패턴 → phrase
+
+      이미 같은 카드가 풀에 있으면 카운트만 증가시키고 신규 생성 안 함.
+    inputSchema:
+      type: object
+      required: [original, corrected, category, target_language]
+      properties:
+        original:
+          type: string
+          description: 사용자가 잘못 쓴 표현
+        corrected:
+          type: string
+          description: 올바른 표현
+        category:
+          type: string
+          description: grammar / awkward / upgrade / 기타 동적 카테고리
+        target_language:
+          type: string
+          description: 학습 대상 언어
+        rule_or_reason:
+          type: string
+          description: 왜 틀렸는지 / 왜 더 나은지 설명
+        example_sentence:
+          type: string
+          description: 호출 AI가 생성한 예문 (선택)
+        cloze_format:
+          type: string
+          description: |
+            cloze deletion 형식 예시. 예 "{{c1::Contact}} someone" — {{c1::정답}} 형태.
+            grammar/phrase 카드에 강력 권장.
+        tags:
+          type: array
+          description: 사용자 정의 태그 + 자동 분류 태그 (예 ["법률영어", "email", "transitive_verb"])
+
+  - name: defend
+    description: |
+      사용자가 첨삭/제안에 동의하지 않고 "내 의도는 ~다"라고 우길 때 호출한다.
+      트리거: "근데 내 의도는", "이건 일부러 그런 건데", "변명할게", "이 표현이 맞을 텐데".
+
+      ⚠️ 5턴 제한: 같은 original 항목에 대해 최대 5턴까지 변명 가능.
+      마도서가 턴 카운트를 관리하므로 호출 AI는 매번 이 tool을 호출해서 현재 turn_number를 받아본다.
+      5턴 초과 시 자동 종료 및 "포기" 로그 적재.
+
+      ⚠️ 판정 자체는 호출 AI(너)가 한다. 마도서는 변명 내용과 판정 결과를 로그에 누적할 뿐.
+      네 판정은 verdict 필드로 넘긴다: "acquitted"(무죄) / "corrected"(재판정) / "give_up"(사용자가 포기) / "pending"(다음 턴 필요).
+
+      반환: 누적된 우기기 로그 (시각화 및 메타인지에 사용).
+    inputSchema:
+      type: object
+      required: [original_correction_id, user_argument, turn_number]
+      properties:
+        original_correction_id:
+          type: string
+          description: 변명 대상 카드 ID (save_correction 결과로 받은 ID, 또는 original 텍스트 자체)
+        user_argument:
+          type: string
+          description: 사용자가 이번 턴에 한 주장
+        turn_number:
+          type: integer
+          description: 현재 변명 턴 번호 (1~5)
+        verdict:
+          type: string
+          description: 이번 턴 판정. "acquitted" / "corrected" / "give_up" / "pending"
+        verdict_reason:
+          type: string
+          description: 호출 AI의 판정 근거
+        final_expression:
+          type: string
+          description: corrected/acquitted 시 최종 채택될 표현
+
+  - name: add_card
+    description: |
+      첨삭과 무관하게 사용자가 직접 단어·문법·관용구를 카드로 추가할 때 호출.
+      트리거: "이 단어 단어장에 추가", "이 표현 외워야겠다", "플래시카드 만들어줘".
+
+      호출 AI(너)는 사용자가 던진 raw 입력을 받아서 카드 구조로 정리한 뒤 이 tool을 호출한다.
+      필요시 예문/cloze를 직접 생성해서 같이 넘긴다 (마도서는 LLM 호출 안 함).
+    inputSchema:
+      type: object
+      required: [front, back, card_type, target_language]
+      properties:
+        front:
+          type: string
+          description: 카드 앞면 (학습 대상 표현)
+        back:
+          type: string
+          description: 카드 뒷면 (의미·번역·설명)
+        card_type:
+          type: string
+          description: "vocab / grammar / phrase"
+        target_language:
+          type: string
+          description: 학습 대상 언어
+        examples:
+          type: array
+          description: 예문 배열 (호출 AI가 생성)
+        cloze_format:
+          type: string
+          description: cloze 형식 (선택)
+        tags:
+          type: array
+          description: 태그 배열
+
+  - name: get_review_queue
+    description: |
+      오늘 복습할 카드 큐를 반환한다. SRS(간격반복) 스케줄에 따라 nextReview 일자가 지난 카드만 포함.
+      트리거: "오늘 복습", "플래시카드 시작", "복습 시작", "뭐 외울 거 있어?", "알랄랄랄랄 복습".
+
+      필터 가능: target_language, tags, card_type. 미지정 시 전체.
+      필터를 자연어로 받았을 때 호출 AI가 변환해서 넘긴다 ("법률영어만" → tags=["법률영어"]).
+    inputSchema:
+      type: object
+      properties:
+        target_language:
+          type: string
+          description: 특정 언어만 필터
+        tags:
+          type: array
+          description: 특정 태그만 필터 (OR 조건)
+        card_type:
+          type: string
+          description: vocab / grammar / phrase 중 하나만
+        limit:
+          type: integer
+          description: 최대 카드 수 (기본 20)
+        include_all:
+          type: boolean
+          description: true면 nextReview 무시하고 전체 풀에서 추출 (전체 플래시카드 모드)
+
+  - name: grade_card
+    description: |
+      복습 카드 한 장을 채점한다. "알았음/모르겠음" 또는 0~5 점수.
+      트리거: 사용자가 복습 중 정답 확인 후 평가할 때.
+
+      SRS 알고리즘: 정답이면 level +1, 다음 복습 [1,3,7,14,30,60]일 후. 오답이면 level 0 리셋.
+    inputSchema:
+      type: object
+      required: [card_id, correct]
+      properties:
+        card_id:
+          type: string
+          description: 채점할 카드 ID
+        correct:
+          type: boolean
+          description: true=알았음, false=모르겠음
+
+  - name: list_cards
+    description: |
+      카드 풀을 조회/검색한다. "내 카드 몇 개?", "법률영어 카드만 보여줘", "최근 추가한 거",
+      "우긴 거 있어?" 등에 호출.
+
+      태그/언어/카테고리/검색어로 필터 가능. 우기기 기록 있는 카드만 별도 필터 가능.
+    inputSchema:
+      type: object
+      properties:
+        target_language:
+          type: string
+        tags:
+          type: array
+        card_type:
+          type: string
+        search:
+          type: string
+          description: front/back 텍스트 부분 일치 검색
+        only_defended:
+          type: boolean
+          description: true면 우기기 로그 있는 카드만
+        sort:
+          type: string
+          description: "recent / frequency / level"
+        limit:
+          type: integer
+
+user_settings:
+  - key: default_target_language
+    type: string
+    default: en
+    description: 새 카드를 만들 때 기본 학습 언어 (사용자가 명시 안 했을 때)
+  - key: native_language
+    type: string
+    default: ko
+    description: 사용자 모국어
+  - key: response_language_mode
+    type: enum
+    options: [target_only, native_only, mixed, auto]
+    default: target_only
+    description: |
+      호출 AI 응답 언어 모드.
+      target_only=학습 언어로만 (Grammarly처럼 immersive),
+      native_only=설명은 항상 모국어로,
+      mixed=예시는 target, 설명은 native,
+      auto=사용자가 그때그때 요청한 언어
+  - key: daily_review_target
+    type: integer
+    default: 20
+    description: 하루 목표 복습 카드 수
+  - key: srs_intervals
+    type: list_string
+    default: ["1", "3", "7", "14", "30", "60"]
+    description: SRS 복습 간격 (일 단위, level 0~5)
+
+visualization:
+  function: render_board
+  cadence: 300
+  height: 480
+  inputSchema:
+    type: object
+    properties:
+      view:
+        type: string
+        description: "overview / by_tag / timeline / defended"
+      target_language:
+        type: string
+      tag:
+        type: string
