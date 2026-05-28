@@ -298,6 +298,10 @@ visualization:
   function: render_board
   cadence: 300
   height: 480
+  # 양방향 호출 허용 — 시각화 안 "알았음/모르겠음" 버튼이 nesy.invoke 로
+  # grade_card 를 직접 부른다. 시각화 함수는 순수 렌더만, 부수효과는 별도 tool.
+  tools_allowed:
+    - grade_card
   inputSchema:
     type: object
     properties:
@@ -309,8 +313,6 @@ visualization:
       tag:
         type: string
       # --- study(공부) 모드 전용 상태 ---
-      # 시각화는 tool 호출 불가 — 버튼 클릭 시 widget-state-change 로 다음 상태를 보내면
-      # 다음 렌더에서 board.ts 가 직접 카드 풀을 읽고 채점/순회한다.
       filter_mode:
         type: string
         description: "study 모드 필터: quota(SRS 만기) / tag(태그별) / all(전체)"
@@ -320,9 +322,3 @@ visualization:
       flipped:
         type: boolean
         description: "study 모드: 카드 뒷면 노출 여부."
-      grade_card_id:
-        type: string
-        description: "이번 렌더에서 채점할 카드 ID. 적용 후 큐의 다음 카드로 넘어감."
-      grade_correct:
-        type: boolean
-        description: "채점 결과 (true=알았음, false=모르겠음). grade_card_id 와 함께."

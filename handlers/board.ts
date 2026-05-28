@@ -1,6 +1,5 @@
 import type { RunInput } from "../index";
 import { type Settings } from "../lib/settings";
-import { nextReviewDate } from "../lib/srs";
 import { todayISO } from "../lib/utils";
 
 function escapeHtml(s: string): string {
@@ -19,24 +18,7 @@ export async function handleRenderBoard(
 ) {
   const view = args.view ?? "overview";
 
-  // --- 1. 채점 부수효과: 시각화는 tool 을 직접 못 부르므로,
-  //        study 버튼 클릭이 grade_card_id 를 args 로 실어 보내면 여기서 적용한다.
-  if (args.grade_card_id) {
-    const rows = await data.list("card:");
-    const target = rows.find((r) => (r.value as any)?.id === args.grade_card_id);
-    if (target) {
-      const card = target.value as any;
-      const correct = args.grade_correct === true || args.grade_correct === "true";
-      card.level = correct
-        ? Math.min((card.level ?? 0) + 1, settings.srs_intervals.length - 1)
-        : 0;
-      card.next_review = nextReviewDate(card.level, settings.srs_intervals);
-      card.last_seen = todayISO();
-      await data.set(target.key, card);
-    }
-  }
-
-  // --- 2. 풀 로드 (채점 반영 후) ---
+  // 시각화 = 순수 렌더만. 채점은 nesy.invoke('grade_card', ...) 가 별도로 처리.
   const rows = await data.list("card:");
   const cards = rows.map((r) => r.value as any).filter(Boolean);
 
@@ -72,14 +54,9 @@ function renderStudy(args: any, allCards: any[], settings: Settings) {
     (a, b) => (b.count ?? 1) - (a.count ?? 1) || (a.level ?? 0) - (b.level ?? 0)
   );
 
-  // 채점이 방금 적용되었다면 다음 카드로 자동 이동
-  let currentId = args.card_id;
-  if (args.grade_card_id) {
-    // 방금 채점한 카드 다음 → 큐에서 그 카드는 빠졌거나 next_review 가 뒤로 갔으므로,
-    // 큐 첫 카드로 (또는 동일 위치 다음 카드로) 자연스럽게 넘어감.
-    currentId = undefined;
-  }
-
+  // 양방향 invoke 로 채점이 끝나면 시각화는 widget-state-change 로
+  // card_id 없이 다시 호출됨 → 큐 첫 카드(채점된 건 빠져 있음) 로 자연 전환.
+  const currentId = args.card_id;
   const currentCard =
     queue.find((c) => c.id === currentId) ?? queue[0] ?? null;
   const flipped = args.flipped === true || args.flipped === "true";
@@ -175,12 +152,12 @@ function renderStudy(args: any, allCards: any[], settings: Settings) {
               <button class="btn ghost" onclick="postState({view:'study', filter_mode:'${filterMode}', tag:'${escapeHtml(
                 tagFilter
               )}'})">건너뛰기</button>`
-              : `<button class="btn ok" onclick="postState({view:'study', filter_mode:'${filterMode}', tag:'${escapeHtml(
+              : `<button class="btn ok" onclick="gradeCurrent('${currentCard.id}', true, {view:'study', filter_mode:'${filterMode}', tag:'${escapeHtml(
                   tagFilter
-                )}', grade_card_id:'${currentCard.id}', grade_correct:true})">알았음</button>
-              <button class="btn no" onclick="postState({view:'study', filter_mode:'${filterMode}', tag:'${escapeHtml(
+                )}'})">알았음</button>
+              <button class="btn no" onclick="gradeCurrent('${currentCard.id}', false, {view:'study', filter_mode:'${filterMode}', tag:'${escapeHtml(
                 tagFilter
-              )}', grade_card_id:'${currentCard.id}', grade_correct:false})">모르겠음</button>`
+              )}'})">모르겠음</button>`
           }
         </div>
       </div>`;
@@ -445,5 +422,42 @@ const POST_STATE_JS = `
 <script>
 function postState(state) {
   parent.postMessage({ type: "widget-state-change", state: state }, "*");
+}
+
+// 양방향 호출 헬퍼 — 시각화 안 버튼이 nesy.invoke 로 마도서 함수를 직접 부른다.
+// nesy.app 의 부모 프레임이 받아서 /api/widgets/[slug]/invoke 로 라우팅 후 응답.
+const __nesyPending = new Map();
+let __nesyInvokeSeq = 0;
+function nesyInvoke(fn, args) {
+  return new Promise((resolve, reject) => {
+    const callId = "nv-" + (++__nesyInvokeSeq) + "-" + Date.now();
+    __nesyPending.set(callId, { resolve, reject });
+    parent.postMessage({ type: "nesy.invoke", call_id: callId, fn: fn, args: args }, "*");
+    setTimeout(() => {
+      if (__nesyPending.has(callId)) {
+        __nesyPending.delete(callId);
+        reject(new Error("응답이 안 와요 (10초 초과)"));
+      }
+    }, 10000);
+  });
+}
+window.addEventListener("message", function (e) {
+  const d = e.data;
+  if (!d || d.type !== "nesy.invoke.result") return;
+  const p = __nesyPending.get(d.call_id);
+  if (!p) return;
+  __nesyPending.delete(d.call_id);
+  if (d.ok) p.resolve(d.data);
+  else p.reject(new Error(d.error || "호출 실패"));
+});
+
+// 카드 채점 → 성공 시 다음 카드로 자연 전환.
+async function gradeCurrent(cardId, correct, nextState) {
+  try {
+    await nesyInvoke("grade_card", { card_id: cardId, correct: correct });
+    postState(nextState);
+  } catch (err) {
+    alert("채점이 안 됐어요: " + (err && err.message ? err.message : err));
+  }
 }
 </script>`;
