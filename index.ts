@@ -1,6 +1,10 @@
 import { readSettings } from "./lib/settings";
 import { handleOnboard } from "./handlers/onboard";
-import { handleCheckText, handleSaveCorrection } from "./handlers/check";
+import {
+  handleCheckText,
+  handleSuggestUpgrades,
+  handleSaveCorrection,
+} from "./handlers/check";
 import { handleDefend } from "./handlers/defend";
 import { handleAddCard, handleListCards } from "./handlers/cards";
 import { handleGetReviewQueue, handleGradeCard } from "./handlers/review";
@@ -28,6 +32,8 @@ export async function run({ input, data }: RunInput): Promise<unknown> {
       return handleOnboard(input.args, data, settings);
     case "check_text":
       return handleCheckText(input.args, data, settings);
+    case "suggest_upgrades":
+      return handleSuggestUpgrades(input.args, data, settings);
     case "save_correction":
       return handleSaveCorrection(input.args, data, settings);
     case "defend":

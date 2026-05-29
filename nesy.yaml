@@ -45,23 +45,31 @@ tools:
 
   - name: check_text
     description: |
-      사용자가 작성한 외국어 텍스트를 첨삭하는 도구.
-      Grammarly 같은 도구를 대체하는 다국어 첨삭/교정 엔진.
+      ⚙️ 1차 첨삭 — "꼭 고쳐야 하는" 항목만 (must-fix tier).
+      사용자가 작성한 외국어 텍스트의 grammar 실수 + 정말 부자연스러운(awkward) 표현만 다룬다.
+      Grammarly 같은 도구의 다국어 버전 — 필수 수정만.
 
       트리거 phrase: "이거 첨삭해줘", "이 문장 자연스러워?", "어색한 부분 잡아줘", "이메일 좀 봐줘",
-      "이거 일본어로 맞나?", "더 formal하게", "이거 grammarly 돌려줘 같은 거",
+      "이거 일본어로 맞나?", "이거 grammarly 돌려줘 같은 거",
       또는 사용자가 외국어 문장을 던지며 검토를 요청할 때 항상 호출.
 
       ⚠️ 중요: 호출 AI(너)가 직접 텍스트를 분석해서 errors 배열을 채워서 넣는다.
-      이 tool은 분석 엔진이 아니라 "분석 결과를 사용자 카드 풀과 매칭하고 응답을 구조화해서 돌려주는" 역할을 한다.
-      네가 해야 할 분석:
-        - grammar 오류 (문법 규칙 위반)
-        - awkward 표현 (의미는 통하지만 부자연스러움)
-        - upgrade 제안 (더 격상된/적절한 표현)
-      각 항목에 original / corrected / category / rule_or_reason 을 채워서 넘긴다.
-      카테고리는 grammar/awkward/upgrade 외에도 학습 도메인에 맞는 동적 카테고리(예: "honorific", "register") 가능.
+      이 tool은 분석 엔진이 아니라 "분석 결과를 사용자 카드 풀과 매칭하고 응답을 구조화해서 돌려주는" 역할.
 
-      반환: errors 각각에 기존 카드 풀과 매칭된 중복 정보 포함. 사용자에게 인정/변명 옵션 제시.
+      ⚠️ errors 에 넣을 카테고리는 단 2가지:
+        - grammar : 명확한 문법 규칙 위반 (틀린 시제, 어순, 격조사, 일치 등). 네이티브가 "틀렸다" 고 단언함.
+        - awkward : 의미는 통하지만 진짜 부자연스러움. "이렇게 안 써요" 수준.
+      절대 넣지 말 것:
+        - "더 격상된 표현", "더 formal 하게 하면", "더 native 처럼", "이렇게 하면 더 좋다"
+          → 이런 발전 제안은 별도 tool suggest_upgrades 의 영역.
+      이렇게 분리하는 이유: 처음부터 모든 제안을 쏟아내면 학습자에게 투머치.
+      필수 수정 먼저 → 사용자가 흡수하고 → 원하면 발전 제안으로 단계적 학습.
+
+      반환: errors 각각에 기존 카드 풀과 매칭된 중복 정보 포함, session_id 발급.
+      사용자에게 각 항목 보여주고 인정/변명 옵션 제시. 인정한 항목은 save_correction 으로 저장.
+
+      직후 응답 끝에 반드시 한 줄 안내: "더 고급 표현이나 발전 방법도 보고 싶으면 말씀해 주세요."
+      사용자가 원하면 그때 suggest_upgrades 호출.
 
       응답 언어 규칙: 사용자가 학습 중인 target_language로 응답하는 것이 기본.
       단 사용자가 native_language로 설명을 요청하면 그 언어로.
@@ -81,16 +89,72 @@ tools:
         errors:
           type: array
           description: |
-            호출 AI가 직접 분석한 항목들. 각 항목은:
-            { "original": str, "corrected": str, "category": str, "rule_or_reason": str, "severity": "high"|"medium"|"low" }
+            호출 AI 가 직접 분석한 필수 수정 항목. grammar / awkward 만. 발전 제안은 제외.
+            각 항목: { "original": str, "corrected": str, "category": "grammar"|"awkward",
+                       "rule_or_reason": str, "severity": "high"|"medium"|"low" }
         polished_version:
           type: string
-          description: 전체 첨삭 후 완성본
+          description: 필수 수정만 적용한 자연스러운 버전 (발전 제안은 미적용)
+
+  - name: suggest_upgrades
+    description: |
+      ⚙️ 2차 발전 제안 — "원하면 더 잘 쓰는" 항목 (level-up tier).
+      check_text 가 끝난 뒤 사용자가 "더 고급 표현 알려줘", "더 발전시킬 수 있어?",
+      "native 처럼 쓰려면?", "더 formal/casual 하게", "이거 더 멋지게", "더 자연스럽게" 라고
+      추가 요청할 때만 호출.
+
+      ⚠️ check_text 와 명확히 분리되는 영역만:
+        - 더 격상된 / 세련된 / 짧고 강력한 표현
+        - register 맞춤 (더 formal 또는 더 casual)
+        - native idiomatic 표현 (관용구, collocation)
+        - 같은 의미의 더 적절한 어휘 선택 (upgrade)
+      grammar 실수나 정말 부자연스러운 표현은 여기서 다루지 않음 — 그건 check_text 의 영역.
+
+      ⚠️ 카드 적재 정책 (매우 중요):
+        upgrade 항목은 자동 카드화 X.
+        사용자가 "이거 외울래", "카드로 추가", "단어장에 넣어줘" 같이 **명시적으로** 카드화
+        의사를 밝힌 항목만 save_correction 으로 별도 저장 (tier="upgrade" 로 넘김).
+        "그냥 알겠어", "그렇구나", 무반응 → 카드화 X. 보여주기만 하고 끝.
+        이유: 발전 제안은 "필수" 가 아닌 "원하면" 영역. 다 카드로 쌓으면 SRS 큐가
+        무거워져서 학습자가 지침. 학습자가 진짜 외우고 싶다고 한 것만 큐에 올림.
+
+      반환: 각 upgrade 가 기존 카드 풀과 매칭된 중복 정보 포함, session 적재.
+    inputSchema:
+      type: object
+      required: [original_text, upgrades]
+      properties:
+        original_text:
+          type: string
+          description: 사용자가 쓴 원문 (또는 check_text 의 polished_version)
+        target_language:
+          type: string
+          description: 이 텍스트의 언어. 미지정 시 사용자 프로파일 기본값
+        session_id:
+          type: string
+          description: |
+            직전 check_text 의 session_id (있으면 같은 세션에 upgrades 이어붙임).
+            없으면 신규 세션 생성.
+        upgrades:
+          type: array
+          description: |
+            호출 AI 가 분석한 발전 제안. 각 항목:
+            { "original": str, "upgraded": str, "rationale": str,
+              "register": "formal"|"casual"|"neutral"|"기타" (선택),
+              "tone": str (선택) }
+        upgraded_version:
+          type: string
+          description: 발전 제안 모두 적용한 polished 버전 (선택)
 
   - name: save_correction
     description: |
-      check_text 결과 중 사용자가 인정한 첨삭 항목을 카드로 적재한다.
-      "이거 인정", "맞네 저장해줘", "전부 인정", "오답노트에 추가" 등에 호출.
+      check_text 또는 suggest_upgrades 결과 중 사용자가 인정/선택한 항목을 카드로 적재.
+
+      트리거 (tier 별로 다름):
+        - tier="essential" (grammar/awkward): "이거 인정", "맞네 저장해줘", "전부 인정",
+          "오답노트에 추가" — check_text 결과를 사용자가 받아들였을 때 정상 호출.
+        - tier="upgrade":  사용자가 명시적으로 "이거 외울래", "카드로 추가", "단어장에 넣어줘"
+          라고 말한 upgrade 항목만 호출. "그냥 알겠어" / 무반응 / 단순 동의 → 호출 X.
+          (자동 카드화 금지 — 발전 제안은 학습자가 의식적으로 픽한 것만 SRS 큐에.)
 
       자동으로 카드 타입 결정:
         - 단일 단어/숙어 → vocab
@@ -104,13 +168,20 @@ tools:
       properties:
         original:
           type: string
-          description: 사용자가 잘못 쓴 표현
+          description: 사용자가 잘못 쓴 표현 (또는 upgrade 의 원문)
         corrected:
           type: string
-          description: 올바른 표현
+          description: 올바른 표현 (또는 upgrade 후 표현)
         category:
           type: string
           description: grammar / awkward / upgrade / 기타 동적 카테고리
+        tier:
+          type: string
+          description: |
+            "essential" (check_text 의 grammar/awkward 인정 항목) 또는
+            "upgrade"   (suggest_upgrades 의 명시적 카드화 요청 항목).
+            미지정 시 category 로 추론 (upgrade → upgrade, 그 외 → essential).
+            보드 통계와 큐 가중치에 사용.
         target_language:
           type: string
           description: 학습 대상 언어
