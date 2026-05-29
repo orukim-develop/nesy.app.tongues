@@ -168,7 +168,7 @@ function renderStudy(args: any, allCards: any[], settings: Settings) {
 ${BASE_CSS}
 ${STUDY_CSS}
 </style></head><body>
-${TABS_HTML(view)}
+${TABS_HTML("study")}
 <div class="filters">
   ${filterChip("quota", `오늘 할당량 (${settings.daily_review_target})`)}
   ${filterChip("tag", "태그별")}
